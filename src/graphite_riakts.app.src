@@ -1,0 +1,17 @@
+{application, graphite_riakts,
+ [{description, "Graphite to RiakTS protocol gateway"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, { graphite_riakts_app, []}},
+  {applications,
+   [kernel,
+    stdlib,
+    ranch
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {maintainers, []},
+  {licenses, []},
+  {links, []}
+ ]}.

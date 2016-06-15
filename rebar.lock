@@ -1,0 +1,5 @@
+[{<<"cache">>,
+  {git,"git://github.com/fogfish/cache.git",
+       {ref,"bda14508ae1c4b7e6adbb96f1e381eb1968358de"}},
+  0},
+ {<<"ranch">>,{pkg,<<"ranch">>,<<"1.2.1">>},0}].
