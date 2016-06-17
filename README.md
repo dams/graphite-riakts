@@ -3,7 +3,7 @@
 
 An OTP application to be plugged in Riak TS to make it behave like a Graphite storage node.
 
-# Quick Start (ugly for now)
+# Quick Start
 
 ## Install and configure Riak TS
 
