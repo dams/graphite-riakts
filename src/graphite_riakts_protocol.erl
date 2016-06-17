@@ -6,42 +6,30 @@
 -export([start_link/4]).
 -export([init/4]).
 
--define(IDLE_TIMEOUT, 5000). % milliseconds
--define(BATCH_SIZE, 1000).
+-include_lib("graphite_riakts_config.hrl").
 
 start_link(Ref, Socket, Transport, Opts) ->
     Pid = spawn_link(?MODULE, init, [Ref, Socket, Transport, Opts]),
     { ok, Pid }.
 
-%    Res = riakc_pb_socket:start_link(Ip, 8087),
-%    case Res of
-%    	{ ok, RiakClientPid } ->
-%    	    error_logger:info_msg(" ** connected to riak_ts ip ~p ~n",[ Ip ]),
-%    	    {ok, Pid};
-%    	Otherwise ->
-%    	    error_logger:info_msg(" ******* CONNECTING TO RIAK_TS --- FAILED with ~p~n",[ Otherwise ]),
-%    	    false
-%    end.
-
 init(Ref, Socket, Transport, _Opts = []) ->
-    {ok, Config} = file:consult("/etc/riak/graphite_riakts.conf"),
-    Ip = proplists:get_value(riakts_ip, Config),
-    { ok, RiakClientPid } = riakc_pb_socket:start_link(Ip, 8087),
+    InitC = graphite_riakts_config:init_context(),
+    { ok, RiakTsPid }     = riakc_pb_socket:start_link(InitC#context.riakts_ip, InitC#context.riakts_port),
+    { ok, RiakKvPid }     = riakc_pb_socket:start_link(InitC#context.riakkv_ip, InitC#context.riakkv_port),
+    { ok, RiakSearchPid } = riakc_pb_socket:start_link(InitC#context.riaksearch_ip, InitC#context.riaksearch_port),
+    C = InitC#context{ riakts_pid = RiakTsPid,
+		      riakkv_pid = RiakKvPid,
+		      riaksearch_pid = RiakSearchPid},
     ok = ranch:accept_ack(Ref),
-    loop(Socket, Transport, _PartialLine = <<"">>,
-	 _Points = [], _NbPoints = 0,
-	 _NbProcessed = 0, RiakClientPid, Config).
-
+    loop(Socket, Transport, _PartialLine = <<"">>, _Points = [], _NbPoints = 0, _NbProcessed = 0, C).
 
 % We've accumulated enough data points, send to riak as batch
-loop(Socket, Transport, PartialLine, Points, NbPoints, NbProcessed, RiakClientPid, Config) when NbPoints > ?BATCH_SIZE ->
-    { ok, N } = send_to_riakts(Points, RiakClientPid, Config),
-    loop(Socket, Transport, PartialLine,
-	 _Points = [], _NbPoints = 0,
-	 NbProcessed + N, RiakClientPid, Config );
+loop(Socket, Transport, PartialLine, Points, NbPoints, NbProcessed, C) when NbPoints > C#context.riakts_write_batch_size ->
+    { ok, N } = send_to_riakts(Points, C),
+    loop(Socket, Transport, PartialLine, _Points = [], _NbPoints = 0, NbProcessed + N, C );
 % We have not yet accumulated enough data points
-loop(Socket, Transport, PartialLine, Points, NbPoints, NbProcessed, RiakClientPid, Config) ->
-    case Transport:recv(Socket, 0, ?IDLE_TIMEOUT) of
+loop(Socket, Transport, PartialLine, Points, NbPoints, NbProcessed, C) ->
+    case Transport:recv(Socket, 0, C#context.ranch_idle_timeout_ms) of
 	{ok, Data} ->
 	    % we support the graphite line protocol, so split on \n
 	    Lines = binary:split(Data, <<$\n>>,[global]),
@@ -51,15 +39,13 @@ loop(Socket, Transport, PartialLine, Points, NbPoints, NbProcessed, RiakClientPi
 	    % Then check and process each lines, get datapoints and new leftover data
 	    { NewPoints, NewNbPoints, NewPartialLine } = process_lines(Lines2, Points, NbPoints),
 	    % loop again, accumulating data points
-	    loop(Socket, Transport, NewPartialLine,
-		 NewPoints, NewNbPoints,
-		 NbProcessed, RiakClientPid, Config );
+	    loop(Socket, Transport, NewPartialLine, NewPoints, NewNbPoints, NbProcessed, C );
 	_Anything ->
 	    % no more network data, process final line of data.
 	    NewPoints = process_line(PartialLine, Points),
 	    % then send the points we have as a last batch to riak ts
-	    { ok, N } = send_to_riakts(NewPoints, RiakClientPid, Config),
-	    error_logger:info_msg(" ---------- Processed ~p Points ~n",[ NbProcessed + N ]),    
+	    { ok, N } = send_to_riakts(NewPoints, C),
+	    error_logger:info_msg("~p: processed ~p Points ~n",[ ?MODULE, NbProcessed + N ]),    
 	    ok = Transport:close(Socket)
     end.
 
@@ -86,57 +72,85 @@ process_line(Line, Acc) ->
 	    Point = { _Family = <<"graphite">>, Metric, Timestamp, Value },
 	    [ Point | Acc];
 	_ ->
-	    error_logger:info_msg("Graphite data Wrong format: ~p~nOriginal Line:~p~n", [Fields, Line]),
+	    error_logger:error_msg("~p: Graphite data wrong format: ~p~nOriginal Line:~p~n", [?MODULE, Fields, Line]),
 	    Acc
     end,
     NewAcc.
 
-send_to_riakts([], _RiakClientPid, _Config) -> { ok, 0 };
-send_to_riakts(Points, RiakClientPid, Config) ->
-    TableName = proplists:get_value(table_name, Config),
-    {T, _} = timer:tc(fun() -> riakc_ts:put(RiakClientPid, TableName, Points) end),
-    T2 = T/1000000,
-%    ok = riakc_ts:put(RiakClientPid, "test2", Points),
-    error_logger:info_msg(" ****************** sent ~p points to Riak table ~p in ~p sec~n",[length(Points), TableName, T2]),
+send_to_riakts([], _C) -> { ok, 0 };
+send_to_riakts(Points, C) ->
+    TableName = C#context.table_name,
+    riakc_ts:put(C#context.riakts_pid, TableName, Points),
+    Metrics = [ Metric || { _Family, Metric, _Timestamp, _Value} <- Points ],
+    UniqueMetrics = sets:to_list(sets:from_list(Metrics)),
+    { CacheMissCount, NewMetrics } = extract_new_metrics(UniqueMetrics, C),
+    case CacheMissCount of 0 -> ok; _ -> error_logger:warning_msg("~p: ~p memory cache miss ~n", [?MODULE, CacheMissCount]) end,
 
-    % UNCOMMENT BELOW TO SEND TO RIAK KV AND SEARCH
-    %% Metrics = [ Metric || { _Family, Metric, _Timestamp, _Value} <- Points ],
-    %% UniqueMetrics = sets:to_list(sets:from_list(Metrics)),
-
-    %% {T5, _} = timer:tc(fun() -> send_to_riakkv(UniqueMetrics, RiakClientPid) end),
-    %% T6 = T5/1000000,
-    %% error_logger:info_msg(" ***** sent ~p keys to riakkv in ~p sec~n",[ length(UniqueMetrics), T6]),
-    %% [ Example | _ ]= UniqueMetrics,
-    %% error_logger:info_msg(" *********** example: ~p ~n",[ Example ]),
+    PartSize = C#context.riaksearch_indexing_batch_size,
+    NewMetricsGroups = part_list(NewMetrics, PartSize),
+    send_to_be_indexed(NewMetricsGroups, C),
     { ok, length(Points) }.
 
-send_to_riakkv(Metrics, _RiakClientPid) ->
-    send_to_riakkv(Metrics, _RiakClientPid, _CacheHitCount = 0).
+    
+part_list(_List, PartSize) when PartSize =< 0 -> [];
+part_list(List, PartSize) -> part_list(List, PartSize, _CurrentCount = 0, _Acc = [], _Res = []).
+part_list([], _PartSize, _CurrentCount, _Acc = [], Res) -> Res;
+part_list([], _PartSize, _CurrentCount, Acc, Res) -> [Acc|Res];
+part_list(List, PartSize, CurrentCount, Acc, Res) when CurrentCount >= PartSize ->
+    part_list(List, PartSize, 0, [], [Acc|Res]);
+part_list([H|T], PartSize, CurrentCount, Acc, Res) ->
+    part_list(T, PartSize, CurrentCount + 1, [H|Acc], Res).
 
 
-send_to_riakkv([ ], _RiakClientPid, CacheHitCount) ->
-    error_logger:info_msg(" ***** CACHEHIT : ~p~n",[ CacheHitCount ]),
-    ok;
-send_to_riakkv([ Metric | T], RiakClientPid, CacheHitCount) ->
-    Key = <<"node-", Metric/binary>>,
-    NewCacheHitCount = case cache:get(nodes_cache, Key) of
-	undefined ->
-	    %error_logger:info_msg(" ***** DIDN'T FIND metric ~p~n",[ Key ]),
-	    Value = <<"{\"node_s\": \"", Metric/binary, "\", \"type_s\": \"node\"}">>,
-	    Obj = riakc_obj:new(_Bucket = <<"metric_nodes">>, _Key = Key, Value ),
-	    Obj2 = riakc_obj:update_content_type(Obj, <<"application/json">>),
-	    ok = riakc_pb_socket:put(RiakClientPid, Obj2, [ {w, 1}, {dw, 0}, {pw, 0} ]),
-	    ok = cache:put(nodes_cache, Key, <<"1">>),
-	    CacheHitCount;
-	    %error_logger:info_msg(" ***** ADDED metric ~p~n",[ Key ]);
-	_CachedValue ->
-	    %error_logger:info_msg(" ***** FOUND metric ~p~n",[ Key ]),
-	    CacheHitCount + 1
-    end,
-    send_to_riakkv(T, RiakClientPid, NewCacheHitCount).
+extract_new_metrics(UniqueMetrics, C) ->
+    extract_new_metrics(UniqueMetrics, _CacheMissCount = 0, _Acc = [], C).
+
+extract_new_metrics([], CacheMissCount, Acc, _C) -> {CacheMissCount, Acc};
+extract_new_metrics([ Metric | Tail ], CacheMissCount, Acc, C) ->
+    % lookup metrics from local memory cache, or riak kv.
+    { NewCacheMissCount, NewAcc } =
+	case cache:get(metric_names_cache, Metric) of
+	    undefined ->
+		ok = cache:put(metric_names_cache, Metric, <<"">>),
+		case riakc_pb_socket:get(C#context.riakkv_pid, C#context.bucket_name , Metric) of
+		    { ok, _Obj } -> { CacheMissCount + 1, Acc };
+		    _Otherwise -> { CacheMissCount, [Metric | Acc] }
+		end;
+	    _val -> { CacheMissCount, Acc }
+	end,
+    extract_new_metrics(Tail, NewCacheMissCount, NewAcc, C).
+
+
+% stores in Riak KV the groups of new metrics to be indexed
+send_to_be_indexed([], _C) -> ok;
+send_to_be_indexed([NewMetricsGroup| Tail], C) ->
+    % we store the new metrics with no key, Riak will generate one for us
+    Obj = riakc_obj:new(_Bucket = <<"to_be_indexed">>, undefined, term_to_binary(NewMetricsGroup) ),
+    RiakKvPid = C#context.riakkv_pid,
+    { ok, ResObj} = riakc_pb_socket:put(RiakKvPid, Obj, [ {w, 1}, {dw, 0}, {pw, 0} ]),
+    Key = riakc_obj:key(ResObj),
+    error_logger:info_msg("~p: added metric names group ~p to set ~n",[ ?MODULE, Key ]),
+    % we keep track of the key in a CRDT set
+    ok = riakc_pb_socket:update_type(RiakKvPid,
+				     {<<"sets">>, <<"graphite_riakts_sets">>}, <<"new_metrics_keys">>,
+				     riakc_set:to_op(riakc_set:add_element(Key, riakc_set:new()))),
+    send_to_be_indexed(Tail, C).
+
 
 number_to_float(Number) ->
     try binary_to_float(Number)
     catch error:badarg ->
 	    binary_to_integer(Number)
     end.
+
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+part_list_test_() ->
+    [ ?_assertEqual(part_list([], 0), []),
+      ?_assertEqual(part_list([], 2), []),
+      ?_assertEqual(part_list([1, 2, 3, 4], 5), [[4,3,2,1]]),
+      ?_assertEqual(part_list([1, 2, 3, 4], 2), [[4,3],[2,1]]),
+      ?_assertEqual(part_list([1, 2, 3], 2),    [[3],[2,1]])
+    ].
+-endif.

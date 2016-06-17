@@ -1,5 +1,5 @@
 {application, graphite_riakts,
- [{description, "Graphite to RiakTS protocol gateway"},
+ [{description, "Graphite storage implementation using RiakTS"},
   {vsn, "0.1.0"},
   {registered, []},
   {mod, { graphite_riakts_app, []}},
