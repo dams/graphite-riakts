@@ -1,6 +1,5 @@
 # graphite_riakts
 
-
 An OTP application to be plugged in Riak TS to make it behave like a Graphite storage node.
 
 # Quick Start
@@ -86,18 +85,22 @@ The application uses [https://github.com/ninenines/ranch](ranch) to maintain a
 pool of TCP acceptors, to receive graphite line protocol data. Currently only
 the line protocol is supported. Graphite data is stored in the Riak TS table.
 
-Indexing metric names is done by Riak Search. To avoid overloading Riak Search,
-indexing is done in batches. New Metric names are stored in a non-indexed Riak
-KV bucket, whose keys are added to a CRDT Set. A genserver is polling this set
-for new keys, and consume them, fetch the list of metric names, and store them
-in a Riak KV bucket that is indexed by Riak Search. The daemon then waits for
-the last metric to be indexed, before moving to the next batch.
+Indexing metric names is done by Riak Search. To avoid Riak Search impacting
+Riak TS and overloading it, indexing is done in batches. New Metric names are
+stored in a non-indexed Riak KV bucket, whose keys are added to a CRDT Set. A
+genserver is polling this set for new keys, and consumes them, fetch the list
+of metric names, and store them in a Riak KV bucket that is indexed by Riak
+Search. The daemon then waits for the last metric of this batch to be indexed,
+before moving to the next batch.
 
 When new graphite metrics arrive, the graphite_riakts application check if the
 metric names are known, or new (they need to be indexed). Instead of querying
 Riak KV bucket for each metric names, the application maintains an in memory
 local cache, using fogfish's [git://github.com/fogfish/cache.git](caching
-library).
+library). When the node starts, this memory cache is warmed up, from Riak
+Search. This is done during RiakTS startup, so the node is usable only when the
+warmup is finished. That's on purpose, to avoid having slow nodes (warming up
+their cache) in a cluster.
 
 # Caveat
 
@@ -115,7 +118,7 @@ cleanup.
 # TODO
 
 - expose memory cache configuration
-- memory cache warmup at startup
+- improve memory cache warmup: load recent metrics only, check cache is full, configuratbility
 - HTTP APIs needs to be implemented
 - Pickle protocl support
 - implement retention configuration

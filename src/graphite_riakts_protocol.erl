@@ -18,8 +18,8 @@ init(Ref, Socket, Transport, _Opts = []) ->
     { ok, RiakKvPid }     = riakc_pb_socket:start_link(InitC#context.riakkv_ip, InitC#context.riakkv_port),
     { ok, RiakSearchPid } = riakc_pb_socket:start_link(InitC#context.riaksearch_ip, InitC#context.riaksearch_port),
     C = InitC#context{ riakts_pid = RiakTsPid,
-		      riakkv_pid = RiakKvPid,
-		      riaksearch_pid = RiakSearchPid},
+                      riakkv_pid = RiakKvPid,
+                      riaksearch_pid = RiakSearchPid},
     ok = ranch:accept_ack(Ref),
     loop(Socket, Transport, _PartialLine = <<"">>, _Points = [], _NbPoints = 0, _NbProcessed = 0, C).
 
@@ -30,23 +30,23 @@ loop(Socket, Transport, PartialLine, Points, NbPoints, NbProcessed, C) when NbPo
 % We have not yet accumulated enough data points
 loop(Socket, Transport, PartialLine, Points, NbPoints, NbProcessed, C) ->
     case Transport:recv(Socket, 0, C#context.ranch_idle_timeout_ms) of
-	{ok, Data} ->
-	    % we support the graphite line protocol, so split on \n
-	    Lines = binary:split(Data, <<$\n>>,[global]),
-	    % prepend the first line with the data left over from previous tcp packet
-	    [ FirstLine | Rest ] = Lines,
-	    Lines2 = [ <<PartialLine/binary, FirstLine/binary>> | Rest],
-	    % Then check and process each lines, get datapoints and new leftover data
-	    { NewPoints, NewNbPoints, NewPartialLine } = process_lines(Lines2, Points, NbPoints),
-	    % loop again, accumulating data points
-	    loop(Socket, Transport, NewPartialLine, NewPoints, NewNbPoints, NbProcessed, C );
-	_Anything ->
-	    % no more network data, process final line of data.
-	    NewPoints = process_line(PartialLine, Points),
-	    % then send the points we have as a last batch to riak ts
-	    { ok, N } = send_to_riakts(NewPoints, C),
-	    error_logger:info_msg("~p: processed ~p Points ~n",[ ?MODULE, NbProcessed + N ]),    
-	    ok = Transport:close(Socket)
+        {ok, Data} ->
+            % we support the graphite line protocol, so split on \n
+            Lines = binary:split(Data, <<$\n>>,[global]),
+            % prepend the first line with the data left over from previous tcp packet
+            [ FirstLine | Rest ] = Lines,
+            Lines2 = [ <<PartialLine/binary, FirstLine/binary>> | Rest],
+            % Then check and process each lines, get datapoints and new leftover data
+            { NewPoints, NewNbPoints, NewPartialLine } = process_lines(Lines2, Points, NbPoints),
+            % loop again, accumulating data points
+            loop(Socket, Transport, NewPartialLine, NewPoints, NewNbPoints, NbProcessed, C );
+        _Anything ->
+            % no more network data, process final line of data.
+            NewPoints = process_line(PartialLine, Points),
+            % then send the points we have as a last batch to riak ts
+            { ok, N } = send_to_riakts(NewPoints, C),
+            error_logger:info_msg("~p: processed ~p Points ~n",[ ?MODULE, NbProcessed + N ]),    
+            ok = Transport:close(Socket)
     end.
 
 % we should never reach that code
@@ -64,16 +64,16 @@ process_line(_Line = <<>>, Acc) -> Acc;
 process_line(Line, Acc) ->
     Fields = binary:split(Line, <<" ">>, [global, trim]),
     NewAcc = case length(Fields) of
-	3 ->
-	    [Metric,ValueBinary,TimestampBinary] = Fields,
-	    Timestamp = round(number_to_float(TimestampBinary) * 1000),
-	    Value = binary_to_float(ValueBinary),
-	    % Family = graphite
-	    Point = { _Family = <<"graphite">>, Metric, Timestamp, Value },
-	    [ Point | Acc];
-	_ ->
-	    error_logger:error_msg("~p: Graphite data wrong format: ~p~nOriginal Line:~p~n", [?MODULE, Fields, Line]),
-	    Acc
+        3 ->
+            [Metric,ValueBinary,TimestampBinary] = Fields,
+            Timestamp = round(number_to_float(TimestampBinary) * 1000),
+            Value = binary_to_float(ValueBinary),
+            % Family = graphite
+            Point = { _Family = <<"graphite">>, Metric, Timestamp, Value },
+            [ Point | Acc];
+        _ ->
+            error_logger:error_msg("~p: Graphite data wrong format: ~p~nOriginal Line:~p~n", [?MODULE, Fields, Line]),
+            Acc
     end,
     NewAcc.
 
@@ -92,11 +92,13 @@ send_to_riakts(Points, C) ->
     { ok, length(Points) }.
 
     
+% list partitioning
 part_list(_List, PartSize) when PartSize =< 0 -> [];
-part_list(List, PartSize) -> part_list(List, PartSize, _CurrentCount = 0, _Acc = [], _Res = []).
-part_list([], _PartSize, _CurrentCount, _Acc = [], Res) -> Res;
-part_list([], _PartSize, _CurrentCount, Acc, Res) -> [Acc|Res];
-part_list(List, PartSize, CurrentCount, Acc, Res) when CurrentCount >= PartSize ->
+part_list( List, PartSize) -> part_list(List, PartSize, _CurrentCount = 0, _Acc = [], _Res = []).
+
+part_list([],  _PartSize, _CurrentCount, _Acc = [], Res) -> Res;
+part_list([],  _PartSize, _CurrentCount,  Acc,      Res) -> [Acc|Res];
+part_list(List, PartSize,  CurrentCount,  Acc,      Res) when CurrentCount >= PartSize ->
     part_list(List, PartSize, 0, [], [Acc|Res]);
 part_list([H|T], PartSize, CurrentCount, Acc, Res) ->
     part_list(T, PartSize, CurrentCount + 1, [H|Acc], Res).
@@ -109,15 +111,15 @@ extract_new_metrics([], CacheMissCount, Acc, _C) -> {CacheMissCount, Acc};
 extract_new_metrics([ Metric | Tail ], CacheMissCount, Acc, C) ->
     % lookup metrics from local memory cache, or riak kv.
     { NewCacheMissCount, NewAcc } =
-	case cache:get(metric_names_cache, Metric) of
-	    undefined ->
-		ok = cache:put(metric_names_cache, Metric, <<"">>),
-		case riakc_pb_socket:get(C#context.riakkv_pid, C#context.bucket_name , Metric) of
-		    { ok, _Obj } -> { CacheMissCount + 1, Acc };
-		    _Otherwise -> { CacheMissCount, [Metric | Acc] }
-		end;
-	    _val -> { CacheMissCount, Acc }
-	end,
+        case cache:get(metric_names_cache, Metric) of
+            undefined ->
+                ok = cache:put(metric_names_cache, Metric, <<"">>),
+                case riakc_pb_socket:get(C#context.riakkv_pid, C#context.bucket_name , Metric) of
+                    { ok, _Obj } -> { CacheMissCount + 1, Acc };
+                    _Otherwise -> { CacheMissCount, [Metric | Acc] }
+                end;
+            _val -> { CacheMissCount, Acc }
+        end,
     extract_new_metrics(Tail, NewCacheMissCount, NewAcc, C).
 
 
@@ -132,15 +134,15 @@ send_to_be_indexed([NewMetricsGroup| Tail], C) ->
     error_logger:info_msg("~p: added metric names group ~p to set ~n",[ ?MODULE, Key ]),
     % we keep track of the key in a CRDT set
     ok = riakc_pb_socket:update_type(RiakKvPid,
-				     {<<"sets">>, <<"graphite_riakts_sets">>}, <<"new_metrics_keys">>,
-				     riakc_set:to_op(riakc_set:add_element(Key, riakc_set:new()))),
+                                     {<<"sets">>, <<"graphite_riakts_sets">>}, <<"new_metrics_keys">>,
+                                     riakc_set:to_op(riakc_set:add_element(Key, riakc_set:new()))),
     send_to_be_indexed(Tail, C).
 
 
 number_to_float(Number) ->
     try binary_to_float(Number)
     catch error:badarg ->
-	    binary_to_integer(Number)
+            binary_to_integer(Number)
     end.
 
 

@@ -24,5 +24,6 @@ init_context() ->
        ?get_from_config(riaksearch_ip),
        ?get_from_config(riaksearch_port),
        ?get_from_config(riaksearch_indexing_batch_size),
-       ?get_from_config(riaksearch_batch_indexing_timeout_ms)
+       ?get_from_config(riaksearch_batch_indexing_timeout_ms),
+       ?get_from_config(warmup_memcache)
       }.

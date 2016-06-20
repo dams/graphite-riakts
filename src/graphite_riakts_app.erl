@@ -15,6 +15,9 @@
 
 % This is called when erlang is started with -s
 start() ->
+    application:ensure_all_started(graphite_riakts, transient).
+
+start(_StartType, _StartArgs) ->
     application:ensure_all_started(cache, transient),
     % allocate in-memory cache, 1 day exp, 48 slices, 512MB per slices
     % so that's 24GB max mem usage, (512MB per 30 min)
@@ -22,9 +25,6 @@ start() ->
     % the documentation wrongly says "quota" instead of "check"
     {ok, _} = cache:start_link(metric_names_cache, Opts = [{n, 48}, {memory, 512*1024*1024}, {ttl, 3600 * 24}, {check, 600} ]),
     error_logger:info_msg("~p: memory cache started, opts: ~p ~n", [ ?MODULE, Opts ]),
-    application:ensure_all_started(graphite_riakts, transient).
-
-start(_StartType, _StartArgs) ->
     error_logger:info_msg("~p: waiting for service riak_kv...~n", [ ?MODULE ]),
     riak_core:wait_for_service(riak_kv),
     error_logger:info_msg("~p: waiting for service yokozuna...~n", [ ?MODULE ]),
@@ -37,12 +37,32 @@ start(_StartType, _StartArgs) ->
     AcceptorsNb      = C#context.ranch_acceptors_nb,
     % this starts the TCP listener, supervised by the ranch listener
     {ok, _} = ranch:start_listener(graphite_riakts_listener, AcceptorsNb,
-				   ranch_tcp, [{port, Port}, {backlog, BacklogNb}, {max_connections, MaxConnectionsNb}],
-				   graphite_riakts_protocol, []),
+                                   ranch_tcp, [{port, Port}, {backlog, BacklogNb}, {max_connections, MaxConnectionsNb}],
+                                   graphite_riakts_protocol, []),
     error_logger:info_msg("~p: ranch listeners started port ~p, backlog ~p, maxconn ~p, acceptors ~p~n",
-			  [?MODULE, Port, BacklogNb, MaxConnectionsNb, AcceptorsNb]),
-    graphite_riakts_sup:start_link().
+                          [?MODULE, Port, BacklogNb, MaxConnectionsNb, AcceptorsNb]),
+    Ret = graphite_riakts_sup:start_link(),
+    ok = graphite_riakts_cache_warmup:warmup(),
+    MetricsCount = graphite_riakts_cache_warmup:get_metrics_count(),
+    error_logger:info_msg("~p: memory cache warmup started, ~p metrics to warmup~n", [ ?MODULE, MetricsCount ]),
+    
+    ok = wait_for_cache_warmup(),
+
+    Ret.
 
 stop(_State) ->
     ok.
+
+% private functions
+wait_for_cache_warmup() ->
+    wait_for_cache_warmup(0).
+wait_for_cache_warmup(PercentDone) when PercentDone < 100 ->
+    error_logger:info_msg("~p: memory cache warmup at ~.2f%~n", [ ?MODULE, PercentDone ]),
+    ok = timer:sleep(200),
+    NewPercentDone = graphite_riakts_cache_warmup:get_percent_done(),
+    wait_for_cache_warmup(NewPercentDone);
+wait_for_cache_warmup(_PercentDone) ->
+    error_logger:info_msg("~p: memory cache warmup at done~n", [ ?MODULE ]),
+    ok.
+
 

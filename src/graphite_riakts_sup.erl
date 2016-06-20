@@ -16,16 +16,19 @@
 -define(SERVER, ?MODULE).
 
 %% Helper macro for declaring children of supervisor
--define(CHILD(I),
-        {I, {I, start_link, []}, 
-         permanent, 5000, worker, [I]}).
+%% Child :: {Id,StartFunc,Restart,Shutdown,Type,Modules}
+-define(CHILD(I, J),
+        {I, {I, start_link, []}, J, 5000, worker, [I]}).
 
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
-%% Child :: {Id,StartFunc,Restart,Shutdown,Type,Modules}
 init([]) ->
+    %% If more than 0 restart  in one second, sup terminates children and itself
     {ok, { {one_for_one, 0, 1},
-	   [
-            ?CHILD(graphite_riakts_indexer)
-	   ]} }.
+           [
+            ?CHILD(graphite_riakts_indexer, permanent),
+            ?CHILD(graphite_riakts_cache_warmup, transient)
+           ]
+	 }
+    }.
