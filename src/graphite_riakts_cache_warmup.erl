@@ -50,7 +50,7 @@ handle_call(_Message, _From, State) -> {reply, error, State}.
 % casts
 handle_cast({ warmup }, _State = { C, _Start, _TotalRows = -1 } ) ->
     {ok, Results} = riakc_pb_socket:search(C#context.riaksearch_pid, <<"metric_names_index">>,
-                                           <<"metric_name_s:*">>, [ {rows, 0}, { start, 0}]),
+                                           <<"type_s:leaf">>, [ {rows, 0}, { start, 0}]),
     NewTotalRows = Results#search_results.num_found,
 
     % call ourselves again to continue warmup
@@ -62,7 +62,7 @@ handle_cast({ warmup }, _State = { C, Start, TotalRows } ) when Start >= TotalRo
 
 handle_cast({ warmup }, _State = { C, Start, TotalRows } ) ->
     {ok, Results} = riakc_pb_socket:search(C#context.riaksearch_pid, <<"metric_names_index">>,
-                                           <<"metric_name_s:*">>, [ {rows, ?ROWS_PER_BATCH}, { start, Start}]),
+                                           <<"type_s:leaf">>, [ {rows, ?ROWS_PER_BATCH}, { start, Start}]),
     Documents = Results#search_results.docs,
     ok = add_to_cache(Documents),
     % cast ourselves again to continue warmup
@@ -79,7 +79,7 @@ code_change(_OldVersion, State, _Extra) -> {ok, State}.
 add_to_cache([]) -> ok;
 add_to_cache([Document | Tail]) ->
     { <<"metric_names_index">>, Value } = Document,
-    case proplists:get_value(<<"metric_name_s">>, Value) of
+    case proplists:get_value(<<"name_s">>, Value) of
         undefined ->
             { error, no_such_field };
         MetricName ->

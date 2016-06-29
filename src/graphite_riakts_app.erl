@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%% @doc graphite_riakts public API
+%% @doc graphite_riakts main application
 %% @end
 %%%-------------------------------------------------------------------
 
@@ -41,14 +41,15 @@ start(_StartType, _StartArgs) ->
                                    graphite_riakts_protocol, []),
     error_logger:info_msg("~p: ranch listeners started port ~p, backlog ~p, maxconn ~p, acceptors ~p~n",
                           [?MODULE, Port, BacklogNb, MaxConnectionsNb, AcceptorsNb]),
-    Ret = graphite_riakts_sup:start_link(),
+    SupRes = graphite_riakts_sup:start_link(),
+    { ok, _Pid } = SupRes,
     ok = graphite_riakts_cache_warmup:warmup(),
     MetricsCount = graphite_riakts_cache_warmup:get_metrics_count(),
     error_logger:info_msg("~p: memory cache warmup started, ~p metrics to warmup~n", [ ?MODULE, MetricsCount ]),
-    
     ok = wait_for_cache_warmup(),
-
-    Ret.
+    ok = graphite_riakts_api:init(),
+    error_logger:info_msg("~p: added API http endpoints~n", [ ?MODULE ]),
+    SupRes.
 
 stop(_State) ->
     ok.
@@ -57,12 +58,12 @@ stop(_State) ->
 wait_for_cache_warmup() ->
     wait_for_cache_warmup(0).
 wait_for_cache_warmup(PercentDone) when PercentDone < 100 ->
-    error_logger:info_msg("~p: memory cache warmup at ~.2f%~n", [ ?MODULE, PercentDone ]),
+    error_logger:info_msg("~p: memory cache warmup at ~.2f%~n", [ ?MODULE, float(PercentDone) ]),
     ok = timer:sleep(200),
     NewPercentDone = graphite_riakts_cache_warmup:get_percent_done(),
     wait_for_cache_warmup(NewPercentDone);
 wait_for_cache_warmup(_PercentDone) ->
-    error_logger:info_msg("~p: memory cache warmup at done~n", [ ?MODULE ]),
+    error_logger:info_msg("~p: memory cache warmup done~n", [ ?MODULE ]),
     ok.
 
 

@@ -18,8 +18,8 @@ init(Ref, Socket, Transport, _Opts = []) ->
     { ok, RiakKvPid }     = riakc_pb_socket:start_link(InitC#context.riakkv_ip, InitC#context.riakkv_port),
     { ok, RiakSearchPid } = riakc_pb_socket:start_link(InitC#context.riaksearch_ip, InitC#context.riaksearch_port),
     C = InitC#context{ riakts_pid = RiakTsPid,
-                      riakkv_pid = RiakKvPid,
-                      riaksearch_pid = RiakSearchPid},
+		       riakkv_pid = RiakKvPid,
+		       riaksearch_pid = RiakSearchPid },
     ok = ranch:accept_ack(Ref),
     loop(Socket, Transport, _PartialLine = <<"">>, _Points = [], _NbPoints = 0, _NbProcessed = 0, C).
 
@@ -103,7 +103,6 @@ part_list(List, PartSize,  CurrentCount,  Acc,      Res) when CurrentCount >= Pa
 part_list([H|T], PartSize, CurrentCount, Acc, Res) ->
     part_list(T, PartSize, CurrentCount + 1, [H|Acc], Res).
 
-
 extract_new_metrics(UniqueMetrics, C) ->
     extract_new_metrics(UniqueMetrics, _CacheMissCount = 0, _Acc = [], C).
 
@@ -127,17 +126,16 @@ extract_new_metrics([ Metric | Tail ], CacheMissCount, Acc, C) ->
 send_to_be_indexed([], _C) -> ok;
 send_to_be_indexed([NewMetricsGroup| Tail], C) ->
     % we store the new metrics with no key, Riak will generate one for us
-    Obj = riakc_obj:new(_Bucket = <<"to_be_indexed">>, undefined, term_to_binary(NewMetricsGroup) ),
+    Obj = riakc_obj:new(_Bucket = <<"to_be_indexed">>, _Key = undefined, _Value = term_to_binary(NewMetricsGroup) ),
     RiakKvPid = C#context.riakkv_pid,
     { ok, ResObj} = riakc_pb_socket:put(RiakKvPid, Obj, [ {w, 1}, {dw, 0}, {pw, 0} ]),
-    Key = riakc_obj:key(ResObj),
-    error_logger:info_msg("~p: added metric names group ~p to set ~n",[ ?MODULE, Key ]),
-    % we keep track of the key in a CRDT set
+    GroupKey = riakc_obj:key(ResObj),
+    error_logger:info_msg("~p: added metric names group ~p to set ~n",[ ?MODULE, GroupKey ]),
+    % we keep track of the group key in a CRDT set
     ok = riakc_pb_socket:update_type(RiakKvPid,
                                      {<<"sets">>, <<"graphite_riakts_sets">>}, <<"new_metrics_keys">>,
-                                     riakc_set:to_op(riakc_set:add_element(Key, riakc_set:new()))),
+                                     riakc_set:to_op(riakc_set:add_element(GroupKey, riakc_set:new()))),
     send_to_be_indexed(Tail, C).
-
 
 number_to_float(Number) ->
     try binary_to_float(Number)

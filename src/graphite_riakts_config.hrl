@@ -14,7 +14,7 @@
           riakkv_port = 8087,
           riaksearch_ip = "127.0.0.1",
           riaksearch_port = 8087,
-          riaksearch_indexing_batch_size = 100,
+          riaksearch_indexing_batch_size = 1000,
           riaksearch_batch_indexing_timeout_ms = 2000,
           warmup_memcache = true,
 

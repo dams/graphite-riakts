@@ -102,10 +102,27 @@ Search. This is done during RiakTS startup, so the node is usable only when the
 warmup is finished. That's on purpose, to avoid having slow nodes (warming up
 their cache) in a cluster.
 
+# HTTP APIs
+
+## find
+
+Implemented at `/metrics/find` endpoint, allows to query metric names
+
+    curl http://127.0.0.1:8098/metrics/find?query=some.metric.*.path.*'
+
+## render
+
+Not implemented yet
+
+## info
+
+Not implemented yet
+
+
 # Caveat
 
 If you use the default configuration, the Riak TS, Riak KV and Riak Search IP
-is the same 127.0.0.1, which means that everything will run inside the Riak TS
+is the same (127.0.0.1), which means that everything will run inside the Riak TS
 instance. However, Riak Search is not officially supported in Riak TS,
 especially AAE issues can happen. It is possible to have one instance of Riak
 TS and one for Riak KV + Riak Search and have then either running on the same
