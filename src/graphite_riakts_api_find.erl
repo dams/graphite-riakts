@@ -43,12 +43,105 @@ malformed_request(ReqData, C) ->
 	_Otherwise                       -> {false, ReqData, NewC}
     end.
     
--define(MAX_RESULTS, 1000).
-
 % main function called when receiving a request
 to_textplain(ReqData, C) ->
     Query = C#wm_context.query,
     error_logger:info_msg("~p: got find request query: ~p ~n", [ ?MODULE, Query ]),
+
+    {ok, RegexDotStarEnd} = re:compile("\\.\\*$"),
+    QueryKind = case re:run(Query, RegexDotStarEnd) of
+	      {match, _ } ->
+		  Query2 = re:replace(Query, RegexDotStarEnd, ""),
+		  case looks_like_regex(Query2) of
+		      false ->
+		        % query is not a regex, it justs ends with .*
+		        % so we are doing a simple tree walking
+			  { tree_walking, Query2 };
+		      true ->
+			  regex
+		         % query is a regex, ask Riak Search
+		  end;
+	      nomatch ->
+		  case looks_like_regex(Query) of
+		      false -> simple_match
+	          % query is not a regex, doesn't end with .*, it's a simple
+	          % metricname match, ask memory cache or KV
+		      ;
+		      true ->
+			  regex
+		  end;
+	      {error, ErrType} -> {error, "Internal error applying .*$ regex: " ++ ErrType}
+	  end,
+
+    {Result, NewReqData} = perform_search(QueryKind, ReqData, C),
+    {Result, NewReqData, C}.
+	    
+
+looks_like_regex(Query) ->
+    looks_like_regex(Query, _Offset = 0).
+looks_like_regex(Query, Offset) ->
+    {ok, ReRegexChars} = re:compile("(\\\\*)[{[*]"),
+    case re:run(Query, ReRegexChars, [ {offset, Offset} ]) of
+	nomatch -> false;
+	{match, [ { WholeMatchOffset, WholeMatchLength },
+		  { _BackslashMatchOffset, BackslashMatchLength } ]} ->
+            % first match is the whole regex matching, the second one is the (\\\\*) part
+	    case  BackslashMatchLength rem 2 of
+		0 -> true; % there were an even number of (or zero) backslash.
+		1 -> looks_like_regex(Query, WholeMatchOffset+WholeMatchLength)
+	    end
+    end.
+
+
+  %% % if simple metric eq
+  %%   % remove potential trailing dot
+  %%   {ok, Regex} = re:compile("\\.$"),
+  %%   MetricName = re:replace(Query, Regex, ""),
+  %%   case cache:get(metric_names_cache, Query) of
+
+
+-define(MAX_RESULTS, 1000).
+perform_search(Error = {error, _}, ReqData, _C) -> {Error, ReqData};
+perform_search({tree_walking, _ParentMetricName}, ReqData, C) ->
+    error_logger:info_msg("~p: query looks like a simple tree walking ~n", [ ?MODULE ]),
+
+    % TODO : replace by tree walking from CRDTs represented tree
+    Query = C#wm_context.query,
+    QueryParts = string:tokens(Query, "."),
+    Level = length(QueryParts),
+    LevelBin = integer_to_binary(Level),
+    {ok, Regex} = re:compile("\\*"),
+    SearchQuery0 = re:replace(string:join(QueryParts, "\\."), Regex, ".*", [global]),
+    SearchQuery1 = list_to_binary(SearchQuery0),
+    SearchQuery = <<"name_s:/", SearchQuery1/binary, "/ AND level_i:", LevelBin/binary>>,
+    error_logger:info_msg("~p: SearchQuery :  ~p ~n", [ ?MODULE, SearchQuery ]),
+
+    case riakc_pb_socket:search(C#wm_context.riaksearch_pid, <<"metric_names_index">>,
+				SearchQuery, [ {fl, [<<"name_s">>, <<"type_s">>]}, {rows, ?MAX_RESULTS}, { start, 0}]) of
+	{ok, Results} ->
+	    NumFound = Results#search_results.num_found,
+	    error_logger:info_msg("~p: found ~p results ~n", [ ?MODULE, NumFound ]),
+	    Documents = Results#search_results.docs,
+
+	    Matches = build_matches(Documents),
+	    Result = {[ {<<"name">>, list_to_binary(Query)},
+			{<<"matches">>, Matches} ]},
+	    Json = iolist_to_binary(mochijson2:encode(Result)),
+
+	    error_logger:info_msg("~p: JSON  ~p ~n", [ ?MODULE, Json ]),
+	    ReqData2 = wrq:set_resp_header("Content-Type", "application/json", ReqData),
+	    {Json, ReqData2};
+	{error, _} = Error ->
+	    {Error, ReqData}
+    end;
+perform_search(regex, ReqData, C) ->
+    error_logger:info_msg("~p: query looks like a regex ~n", [ ?MODULE ]),
+    
+    % query looks like a regexp, let's split the parts between dots, compute
+    % the level we need, replace * by .*, and original dots by \. so that we
+    % have a PCRE regex we can pass to solr (riak search). Run the search, and
+    % format the output
+    Query = C#wm_context.query,
     QueryParts = string:tokens(Query, "."),
     Level = length(QueryParts),
     LevelBin = integer_to_binary(Level),
@@ -77,21 +170,24 @@ to_textplain(ReqData, C) ->
     %% 	<<"node">> -> error_logger:info_msg("~p: exact match node in memory cache ~n", [ ?MODULE ])
     %% end
 
+    case riakc_pb_socket:search(C#wm_context.riaksearch_pid, <<"metric_names_index">>,
+				SearchQuery, [ {fl, [<<"name_s">>, <<"type_s">>]}, {rows, ?MAX_RESULTS}, { start, 0}]) of
+	{ok, Results} ->
+	    NumFound = Results#search_results.num_found,
+	    error_logger:info_msg("~p: found ~p results ~n", [ ?MODULE, NumFound ]),
+	    Documents = Results#search_results.docs,
 
-    {ok, Results} = riakc_pb_socket:search(C#wm_context.riaksearch_pid, <<"metric_names_index">>,
-                                           SearchQuery, [ {fl, [<<"name_s">>, <<"type_s">>]}, {rows, ?MAX_RESULTS}, { start, 0}]),
-    NumFound = Results#search_results.num_found,
-    error_logger:info_msg("~p: found ~p results ~n", [ ?MODULE, NumFound ]),
-    Documents = Results#search_results.docs,
+	    Matches = build_matches(Documents),
+	    Result = {[ {<<"name">>, list_to_binary(Query)},
+			{<<"matches">>, Matches} ]},
+	    Json = iolist_to_binary(mochijson2:encode(Result)),
 
-    Matches = build_matches(Documents),
-    Result = {[ {<<"name">>, list_to_binary(Query)},
-		{<<"matches">>, Matches} ]},
-    Json = iolist_to_binary(mochijson2:encode(Result)),
-
-    error_logger:info_msg("~p: JSON  ~p ~n", [ ?MODULE, Json ]),
-    ReqData2 = wrq:set_resp_header("Content-Type", "application/json", ReqData),
-    {Json, ReqData2, C}.
+	    error_logger:info_msg("~p: JSON  ~p ~n", [ ?MODULE, Json ]),
+	    ReqData2 = wrq:set_resp_header("Content-Type", "application/json", ReqData),
+	    {Json, ReqData2};
+	{error, _} = Error ->
+	    {Error, ReqData}
+    end.
 
 service_available(ReqData, Ctx) ->
     {true, ReqData, Ctx}.
@@ -109,3 +205,22 @@ build_matches([Document|Tail], Acc) ->
 	     end,
     Element = {[ {path, Path}, {isLeaf, IsLeaf} ]},
     build_matches(Tail, [Element| Acc]).
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+looks_like_regex_test_() ->
+    [ ?_assertEqual(looks_like_regex(""), false),
+      ?_assertEqual(looks_like_regex("foo.bar"), false),
+      ?_assertEqual(looks_like_regex("foo.[b]ar"), true),
+      ?_assertEqual(looks_like_regex("foo.[bar"), true),
+      ?_assertEqual(looks_like_regex("foo.{bar"), true),
+      ?_assertEqual(looks_like_regex("foo.bar*"), true),
+      ?_assertEqual(looks_like_regex("foo.ba*r"), true),
+      ?_assertEqual(looks_like_regex("foo.ba\*r"), true), % remember, backslash needs double escaping in Erlang strings, so "\*" is *
+      ?_assertEqual(looks_like_regex("foo.ba\\*r"), false),
+      ?_assertEqual(looks_like_regex("foo.ba\\\\*r"), true),
+      ?_assertEqual(looks_like_regex("foo.ba\\\\\\*r"), false),
+      ?_assertEqual(looks_like_regex("foo.ba\\\\\\\\*r"), true)
+    ].
+-endif.

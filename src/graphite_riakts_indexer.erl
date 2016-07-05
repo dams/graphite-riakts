@@ -35,7 +35,7 @@ handle_call({maybe_index}, _From, _State = { C }) ->
 				     <<"new_metrics_keys">>),
     SomethingWasIndexed = index_from_set(Set, C),
     SleepTime = case SomethingWasIndexed of
-                    false -> 1000; % there were nothing to index, call us in 1 sec
+                    false -> 10000; % there were nothing to index, call us in 10 sec
                     _ -> 1         % we indexed something, call us in 1 ms 
                 end,
     {ok, _Timer} = timer:apply_after(SleepTime, ?MODULE, maybe_index, []),    
@@ -77,7 +77,10 @@ index_from_set({ok, Set}, C) ->
     { MetricNameToCheck, GroupKey } = index_first_group(Groups, Set, C),
     % we're going to wait for the last stored metric name to be indexed
     wait_for_indexing(MetricNameToCheck, GroupKey, C),
-    true.
+    true;
+index_from_set(Reason, _C) ->
+    error_logger:info_msg("~p: couldn't get Set to index. Reason: ~p ~n",[ ?MODULE, Reason ]),    
+    false.
 
 index_first_group([], _Set, _C) -> { undefined, undefined };
 index_first_group([GroupKey|_Tail], Set, C) ->
