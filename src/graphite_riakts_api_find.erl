@@ -13,24 +13,28 @@
 
 
 -record(wm_context, {
-          format = "json",
-	  query = undefined,
-          riaksearch_pid = undefined
+          format = "json" :: string(),
+	  query           :: string(),
+          riaksearch_pid  :: pid()
 	 }).
 
+-type search_doc() :: {bitstring(), [proplists:property()] }.
 -record(search_results, {
-          docs,      %% Result documents
-          max_score, %% Maximum score
-          num_found  %% Number of results
+          docs :: [search_doc()],         %% Result documents
+          max_score :: float(),           %% Maximum score
+          num_found :: non_neg_integer()  %% Number of results
          }).
 
+-spec init(any()) -> {ok, #wm_context{}}.
 init(_) ->
     {ok, #wm_context{}}.
 
+-spec content_types_provided(#wm_reqdata{}, #wm_context{}) -> {[any()], #wm_reqdata{}, #wm_context{}}.
 content_types_provided(ReqData, C) ->
     {[{"plain/text", to_textplain}],
      ReqData, C}.
 
+-spec malformed_request(#wm_reqdata{}, #wm_context{}) -> {true | false, #wm_reqdata{}, #wm_context{}}.
 malformed_request(ReqData, C) ->
     InitC = graphite_riakts_config:init_context(),
     { ok, RiakSearchPid } = riakc_pb_socket:start_link(InitC#context.riaksearch_ip, InitC#context.riaksearch_port),
@@ -44,6 +48,7 @@ malformed_request(ReqData, C) ->
     end.
     
 % main function called when receiving a request
+-spec to_textplain(#wm_reqdata{}, #wm_context{}) -> {binary(), #wm_reqdata{}, #wm_context{}}.
 to_textplain(ReqData, C) ->
     Query = C#wm_context.query,
     error_logger:info_msg("~p: got find request query: ~p ~n", [ ?MODULE, Query ]),
@@ -69,16 +74,17 @@ to_textplain(ReqData, C) ->
 		      ;
 		      true ->
 			  regex
-		  end;
-	      {error, ErrType} -> {error, "Internal error applying .*$ regex: " ++ ErrType}
+		  end
 	  end,
 
     {Result, NewReqData} = perform_search(QueryKind, ReqData, C),
     {Result, NewReqData, C}.
 	    
 
+-spec looks_like_regex(string()) -> boolean().
 looks_like_regex(Query) ->
     looks_like_regex(Query, _Offset = 0).
+-spec looks_like_regex(string(), non_neg_integer()) -> boolean().
 looks_like_regex(Query, Offset) ->
     {ok, ReRegexChars} = re:compile("(\\\\*)[{[*]"),
     case re:run(Query, ReRegexChars, [ {offset, Offset} ]) of
@@ -99,9 +105,10 @@ looks_like_regex(Query, Offset) ->
   %%   MetricName = re:replace(Query, Regex, ""),
   %%   case cache:get(metric_names_cache, Query) of
 
+-spec perform_search( {tree_walking, string()} | regex | simple_match,
+                      #wm_reqdata{}, #wm_context{}) -> { iodata(), #wm_reqdata{} }.
 
 -define(MAX_RESULTS, 1000).
-perform_search(Error = {error, _}, ReqData, _C) -> {Error, ReqData};
 perform_search({tree_walking, _ParentMetricName}, ReqData, C) ->
     error_logger:info_msg("~p: query looks like a simple tree walking ~n", [ ?MODULE ]),
 
@@ -189,12 +196,15 @@ perform_search(regex, ReqData, C) ->
 	    {Error, ReqData}
     end.
 
+-spec service_available(#wm_reqdata{}, #wm_context{}) -> { boolean(), #wm_reqdata{}, #wm_context{} }.
 service_available(ReqData, Ctx) ->
     {true, ReqData, Ctx}.
 
+-type match() :: {[proplists:property()]}.
+-spec build_matches( [search_doc()] ) -> [match()].
+-spec build_matches( [search_doc()], [match()] ) -> [match()].
 build_matches(Documents) ->
     build_matches(Documents, []).
-
 build_matches([], Acc) -> Acc;
 build_matches([Document|Tail], Acc) ->
     { <<"metric_names_index">>, Value } = Document,

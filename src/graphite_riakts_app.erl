@@ -19,17 +19,18 @@ start() ->
 
 start(_StartType, _StartArgs) ->
     application:ensure_all_started(cache, transient),
+
     % allocate in-memory cache, 1 day exp, 48 slices, 512MB per slices
     % so that's 24GB max mem usage, (512MB per 30 min)
     % check cache size/expiration every 10 min
     % the documentation wrongly says "quota" instead of "check"
-    {ok, _} = cache:start_link(metric_names_cache, Opts = [{n, 48}, {memory, 512*1024*1024}, {ttl, 3600 * 24}, {check, 600} ]),
+    {ok, _} = cache:start_link(metric_names_cache, [{n, 48}, {memory, 512*1024*1024}, {ttl, 3600 * 24}, {check, 600} ]),
     % allocate in-memory cache, 5 sec expiration, 48 slices, 512MB per slices
     % so that's 24GB max mem usage, (512MB per 30 min)
     % check cache size/expiration every 10 min
     % the documentation wrongly says "quota" instead of "check"
-    {ok, _} = cache:start_link(tree_walking_cache, Opts = [{n, 48}, {memory, 512*1024*1024}, {ttl, 3600 * 24}, {check, 600} ]),
-    error_logger:info_msg("~p: memory cache started, opts: ~p ~n", [ ?MODULE, Opts ]),
+    {ok, _} = cache:start_link(tree_walking_cache, [{n, 48}, {memory, 512*1024*1024}, {ttl, 3600 * 24}, {check, 600} ]),
+    error_logger:info_msg("~p: memory cache started, opts: ~n", [ ?MODULE ]),
     error_logger:info_msg("~p: waiting for service riak_kv...~n", [ ?MODULE ]),
     riak_core:wait_for_service(riak_kv),
     error_logger:info_msg("~p: waiting for service yokozuna...~n", [ ?MODULE ]),

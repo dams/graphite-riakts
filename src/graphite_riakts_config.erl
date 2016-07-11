@@ -5,6 +5,7 @@
 
 -define(get_from_config(X), X = proplists:get_value(X, Config, Default#context.X)).
 
+-spec init_context() -> #context{}.
 init_context() ->
     {ok, Config} = file:consult("/etc/riak/graphite_riakts.conf"),
     Default = #context{},

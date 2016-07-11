@@ -7,6 +7,7 @@
 
 -export([init/0]).
 
+-spec init() -> ok.
 init() ->
     [webmachine_router:add_route(R) 
      || R <- [ {["metrics", "find"],

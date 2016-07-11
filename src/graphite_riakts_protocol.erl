@@ -8,10 +8,22 @@
 
 -include_lib("graphite_riakts_config.hrl").
 
+-type ref() :: any().
+-type socket() :: any().
+-type transport() :: any().
+
+-type family() :: bitstring().
+-type metric_name() :: bitstring().
+-type timestamp() :: non_neg_integer().
+-type datapoint() :: { family(), metric_name(), timestamp(), number() }.
+-type datapoints() :: list(datapoint()).
+
+-spec start_link(ref(), socket(), transport(), ranch:opts()) -> {ok, pid()}.
 start_link(Ref, Socket, Transport, Opts) ->
     Pid = spawn_link(?MODULE, init, [Ref, Socket, Transport, Opts]),
     { ok, Pid }.
 
+-spec init(ref(), socket(), transport(), ranch:opts()) -> ok.
 init(Ref, Socket, Transport, _Opts = []) ->
     InitC = graphite_riakts_config:init_context(),
     { ok, RiakTsPid }     = riakc_pb_socket:start_link(InitC#context.riakts_ip, InitC#context.riakts_port),
@@ -23,6 +35,7 @@ init(Ref, Socket, Transport, _Opts = []) ->
     ok = ranch:accept_ack(Ref),
     loop(Socket, Transport, _PartialLine = <<"">>, _Points = [], _NbPoints = 0, _NbProcessed = 0, C).
 
+-spec loop(socket(), transport(), binary(), datapoints(), non_neg_integer(), non_neg_integer(), #context{} ) -> ok.
 % We've accumulated enough data points, send to riak as batch
 loop(Socket, Transport, PartialLine, Points, NbPoints, NbProcessed, C) when NbPoints > C#context.riakts_write_batch_size ->
     { ok, N } = send_to_riakts(Points, C),
@@ -49,6 +62,8 @@ loop(Socket, Transport, PartialLine, Points, NbPoints, NbProcessed, C) ->
             ok = Transport:close(Socket)
     end.
 
+-spec process_lines([bitstring()], datapoints(), non_neg_integer())
+		   -> {datapoints(), non_neg_integer(), bitstring()}.
 % we should never reach that code
 process_lines(_Lines = [], Acc, Count) ->
     { Acc, Count, <<"">> };
@@ -60,6 +75,7 @@ process_lines([Line|Rest], Acc, Count) ->
     NewAcc = process_line(Line, Acc),
     process_lines(Rest, NewAcc, Count + 1).
 
+-spec process_line(bitstring(), datapoints()) -> datapoints().
 process_line(_Line = <<>>, Acc) -> Acc;
 process_line(Line, Acc) ->
     Fields = binary:split(Line, <<" ">>, [global, trim]),
@@ -77,6 +93,7 @@ process_line(Line, Acc) ->
     end,
     NewAcc.
 
+-spec send_to_riakts(datapoints(), #context{}) -> { ok, non_neg_integer() }.
 send_to_riakts([], _C) -> { ok, 0 };
 send_to_riakts(Points, C) ->
     TableName = C#context.table_name,
@@ -93,9 +110,11 @@ send_to_riakts(Points, C) ->
 
     
 % list partitioning
+-spec part_list(list(), non_neg_integer()) -> list(list()).
 part_list(_List, PartSize) when PartSize =< 0 -> [];
 part_list( List, PartSize) -> part_list(List, PartSize, _CurrentCount = 0, _Acc = [], _Res = []).
 
+-spec part_list(list(), non_neg_integer(), non_neg_integer(), list(), list(list())) -> list(list()).
 part_list([],  _PartSize, _CurrentCount, _Acc = [], Res) -> Res;
 part_list([],  _PartSize, _CurrentCount,  Acc,      Res) -> [Acc|Res];
 part_list(List, PartSize,  CurrentCount,  Acc,      Res) when CurrentCount >= PartSize ->
@@ -103,9 +122,12 @@ part_list(List, PartSize,  CurrentCount,  Acc,      Res) when CurrentCount >= Pa
 part_list([H|T], PartSize, CurrentCount, Acc, Res) ->
     part_list(T, PartSize, CurrentCount + 1, [H|Acc], Res).
 
+-spec extract_new_metrics(list(metric_name()), #context{}) -> {non_neg_integer(), list(metric_name())}.
 extract_new_metrics(UniqueMetrics, C) ->
     extract_new_metrics(UniqueMetrics, _CacheMissCount = 0, _Acc = [], C).
 
+-spec extract_new_metrics(list(metric_name()), non_neg_integer(), list(), #context{})
+			 -> {non_neg_integer(), list(metric_name())}.
 extract_new_metrics([], CacheMissCount, Acc, _C) -> {CacheMissCount, Acc};
 extract_new_metrics([ Metric | Tail ], CacheMissCount, Acc, C) ->
     % lookup metrics from local memory cache, or riak kv.
@@ -123,6 +145,7 @@ extract_new_metrics([ Metric | Tail ], CacheMissCount, Acc, C) ->
 
 
 % stores in Riak KV the groups of new metrics to be indexed
+-spec send_to_be_indexed(list(metric_name()), #context{}) -> ok.
 send_to_be_indexed([], _C) -> ok;
 send_to_be_indexed([NewMetricsGroup| Tail], C) ->
     % we store the new metrics with no key, Riak will generate one for us
@@ -137,6 +160,7 @@ send_to_be_indexed([NewMetricsGroup| Tail], C) ->
                                      riakc_set:to_op(riakc_set:add_element(GroupKey, riakc_set:new()))),
     send_to_be_indexed(Tail, C).
 
+-spec number_to_float(bitstring()) -> number().
 number_to_float(Number) ->
     try binary_to_float(Number)
     catch error:badarg ->
