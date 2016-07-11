@@ -30,8 +30,8 @@ init(Ref, Socket, Transport, _Opts = []) ->
     { ok, RiakKvPid }     = riakc_pb_socket:start_link(InitC#context.riakkv_ip, InitC#context.riakkv_port),
     { ok, RiakSearchPid } = riakc_pb_socket:start_link(InitC#context.riaksearch_ip, InitC#context.riaksearch_port),
     C = InitC#context{ riakts_pid = RiakTsPid,
-		       riakkv_pid = RiakKvPid,
-		       riaksearch_pid = RiakSearchPid },
+                       riakkv_pid = RiakKvPid,
+                       riaksearch_pid = RiakSearchPid },
     ok = ranch:accept_ack(Ref),
     loop(Socket, Transport, _PartialLine = <<"">>, _Points = [], _NbPoints = 0, _NbProcessed = 0, C).
 
@@ -63,7 +63,7 @@ loop(Socket, Transport, PartialLine, Points, NbPoints, NbProcessed, C) ->
     end.
 
 -spec process_lines([bitstring()], datapoints(), non_neg_integer())
-		   -> {datapoints(), non_neg_integer(), bitstring()}.
+                   -> {datapoints(), non_neg_integer(), bitstring()}.
 % we should never reach that code
 process_lines(_Lines = [], Acc, Count) ->
     { Acc, Count, <<"">> };
@@ -127,7 +127,7 @@ extract_new_metrics(UniqueMetrics, C) ->
     extract_new_metrics(UniqueMetrics, _CacheMissCount = 0, _Acc = [], C).
 
 -spec extract_new_metrics(list(metric_name()), non_neg_integer(), list(), #context{})
-			 -> {non_neg_integer(), list(metric_name())}.
+                         -> {non_neg_integer(), list(metric_name())}.
 extract_new_metrics([], CacheMissCount, Acc, _C) -> {CacheMissCount, Acc};
 extract_new_metrics([ Metric | Tail ], CacheMissCount, Acc, C) ->
     % lookup metrics from local memory cache, or riak kv.

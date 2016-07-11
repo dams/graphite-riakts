@@ -30,5 +30,5 @@ init([]) ->
             ?CHILD(graphite_riakts_indexer, permanent),
             ?CHILD(graphite_riakts_cache_warmup, transient)
            ]
-	 }
+         }
     }.

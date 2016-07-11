@@ -2,11 +2,11 @@
 
 %% webmachine resource exports
 -export([ init/1,
-	  content_types_provided/2,
-	  service_available/2,
-	  malformed_request/2,
-	  to_textplain/2
-	 ]).
+          content_types_provided/2,
+          service_available/2,
+          malformed_request/2,
+          to_textplain/2
+         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include_lib("graphite_riakts_config.hrl").
@@ -14,9 +14,9 @@
 
 -record(wm_context, {
           format = "json" :: string(),
-	  query           :: string(),
+          query           :: string(),
           riaksearch_pid  :: pid()
-	 }).
+         }).
 
 -type search_doc() :: {bitstring(), [proplists:property()] }.
 -record(search_results, {
@@ -39,12 +39,12 @@ malformed_request(ReqData, C) ->
     InitC = graphite_riakts_config:init_context(),
     { ok, RiakSearchPid } = riakc_pb_socket:start_link(InitC#context.riaksearch_ip, InitC#context.riaksearch_port),
     NewC = #wm_context{
-	      query = case wrq:get_qs_value("query", ReqData) of undefined -> C#wm_context.query; V -> V end,
-	      riaksearch_pid = RiakSearchPid
-	     },
+              query = case wrq:get_qs_value("query", ReqData) of undefined -> C#wm_context.query; V -> V end,
+              riaksearch_pid = RiakSearchPid
+             },
     case NewC of
         #wm_context{ query = undefined } -> {true, ReqData, C};
-	_Otherwise                       -> {false, ReqData, NewC}
+        _Otherwise                       -> {false, ReqData, NewC}
     end.
     
 % main function called when receiving a request
@@ -55,31 +55,31 @@ to_textplain(ReqData, C) ->
 
     {ok, RegexDotStarEnd} = re:compile("\\.\\*$"),
     QueryKind = case re:run(Query, RegexDotStarEnd) of
-	      {match, _ } ->
-		  Query2 = re:replace(Query, RegexDotStarEnd, ""),
-		  case looks_like_regex(Query2) of
-		      false ->
-		        % query is not a regex, it justs ends with .*
-		        % so we are doing a simple tree walking
-			  { tree_walking, Query2 };
-		      true ->
-			  regex
-		         % query is a regex, ask Riak Search
-		  end;
-	      nomatch ->
-		  case looks_like_regex(Query) of
-		      false -> simple_match
-	          % query is not a regex, doesn't end with .*, it's a simple
-	          % metricname match, ask memory cache or KV
-		      ;
-		      true ->
-			  regex
-		  end
-	  end,
+              {match, _ } ->
+                  Query2 = re:replace(Query, RegexDotStarEnd, ""),
+                  case looks_like_regex(Query2) of
+                      false ->
+                        % query is not a regex, it justs ends with .*
+                        % so we are doing a simple tree walking
+                          { tree_walking, Query2 };
+                      true ->
+                          regex
+                         % query is a regex, ask Riak Search
+                  end;
+              nomatch ->
+                  case looks_like_regex(Query) of
+                      false -> simple_match
+                  % query is not a regex, doesn't end with .*, it's a simple
+                  % metricname match, ask memory cache or KV
+                      ;
+                      true ->
+                          regex
+                  end
+          end,
 
     {Result, NewReqData} = perform_search(QueryKind, ReqData, C),
     {Result, NewReqData, C}.
-	    
+            
 
 -spec looks_like_regex(string()) -> boolean().
 looks_like_regex(Query) ->
@@ -88,14 +88,14 @@ looks_like_regex(Query) ->
 looks_like_regex(Query, Offset) ->
     {ok, ReRegexChars} = re:compile("(\\\\*)[{[*]"),
     case re:run(Query, ReRegexChars, [ {offset, Offset} ]) of
-	nomatch -> false;
-	{match, [ { WholeMatchOffset, WholeMatchLength },
-		  { _BackslashMatchOffset, BackslashMatchLength } ]} ->
+        nomatch -> false;
+        {match, [ { WholeMatchOffset, WholeMatchLength },
+                  { _BackslashMatchOffset, BackslashMatchLength } ]} ->
             % first match is the whole regex matching, the second one is the (\\\\*) part
-	    case  BackslashMatchLength rem 2 of
-		0 -> true; % there were an even number of (or zero) backslash.
-		1 -> looks_like_regex(Query, WholeMatchOffset+WholeMatchLength)
-	    end
+            case  BackslashMatchLength rem 2 of
+                0 -> true; % there were an even number of (or zero) backslash.
+                1 -> looks_like_regex(Query, WholeMatchOffset+WholeMatchLength)
+            end
     end.
 
 
@@ -124,22 +124,22 @@ perform_search({tree_walking, _ParentMetricName}, ReqData, C) ->
     error_logger:info_msg("~p: SearchQuery :  ~p ~n", [ ?MODULE, SearchQuery ]),
 
     case riakc_pb_socket:search(C#wm_context.riaksearch_pid, <<"metric_names_index">>,
-				SearchQuery, [ {fl, [<<"name_s">>, <<"type_s">>]}, {rows, ?MAX_RESULTS}, { start, 0}]) of
-	{ok, Results} ->
-	    NumFound = Results#search_results.num_found,
-	    error_logger:info_msg("~p: found ~p results ~n", [ ?MODULE, NumFound ]),
-	    Documents = Results#search_results.docs,
+                                SearchQuery, [ {fl, [<<"name_s">>, <<"type_s">>]}, {rows, ?MAX_RESULTS}, { start, 0}]) of
+        {ok, Results} ->
+            NumFound = Results#search_results.num_found,
+            error_logger:info_msg("~p: found ~p results ~n", [ ?MODULE, NumFound ]),
+            Documents = Results#search_results.docs,
 
-	    Matches = build_matches(Documents),
-	    Result = {[ {<<"name">>, list_to_binary(Query)},
-			{<<"matches">>, Matches} ]},
-	    Json = iolist_to_binary(mochijson2:encode(Result)),
+            Matches = build_matches(Documents),
+            Result = {[ {<<"name">>, list_to_binary(Query)},
+                        {<<"matches">>, Matches} ]},
+            Json = iolist_to_binary(mochijson2:encode(Result)),
 
-	    error_logger:info_msg("~p: JSON  ~p ~n", [ ?MODULE, Json ]),
-	    ReqData2 = wrq:set_resp_header("Content-Type", "application/json", ReqData),
-	    {Json, ReqData2};
-	{error, _} = Error ->
-	    {Error, ReqData}
+            error_logger:info_msg("~p: JSON  ~p ~n", [ ?MODULE, Json ]),
+            ReqData2 = wrq:set_resp_header("Content-Type", "application/json", ReqData),
+            {Json, ReqData2};
+        {error, _} = Error ->
+            {Error, ReqData}
     end;
 perform_search(regex, ReqData, C) ->
     error_logger:info_msg("~p: query looks like a regex ~n", [ ?MODULE ]),
@@ -164,36 +164,36 @@ perform_search(regex, ReqData, C) ->
 
     %% % try exact query from memory cache
     %% case cache:get(metric_names_cache, Query) of
-    %% 	undefined ->
-    %% 	    % try exact query from Riak KV
-    %% 	    case riakc_pb_socket:get(C#context.riakkv_pid, C#context.bucket_name, Query) of
-    %% 		{ ok, Obj } -> Value = binary_to_term(riakc_obj:get_value(Obj)),
-    %% 			       error_logger:info_msg("~p: exact query in Riak KV: ~p ~n", [ ?MODULE, Value ]);
-    %% 		_Otherwise -> 
-    %% 		    {ok, Results} = riakc_pb_socket:search(C#wm_context.riaksearch_pid, <<"metric_names_index">>,
-    %% 							   <<"metric_name_s:*">>, [ {rows, ?MAX_RESULTS}, { start, 0}]),
-    %% 	    end;
-    %% 	<<"">> -> error_logger:info_msg("~p: exact match metric in memory cache ~n", [ ?MODULE ]);
-    %% 	<<"node">> -> error_logger:info_msg("~p: exact match node in memory cache ~n", [ ?MODULE ])
+    %%  undefined ->
+    %%      % try exact query from Riak KV
+    %%      case riakc_pb_socket:get(C#context.riakkv_pid, C#context.bucket_name, Query) of
+    %%          { ok, Obj } -> Value = binary_to_term(riakc_obj:get_value(Obj)),
+    %%                         error_logger:info_msg("~p: exact query in Riak KV: ~p ~n", [ ?MODULE, Value ]);
+    %%          _Otherwise -> 
+    %%              {ok, Results} = riakc_pb_socket:search(C#wm_context.riaksearch_pid, <<"metric_names_index">>,
+    %%                                                     <<"metric_name_s:*">>, [ {rows, ?MAX_RESULTS}, { start, 0}]),
+    %%      end;
+    %%  <<"">> -> error_logger:info_msg("~p: exact match metric in memory cache ~n", [ ?MODULE ]);
+    %%  <<"node">> -> error_logger:info_msg("~p: exact match node in memory cache ~n", [ ?MODULE ])
     %% end
 
     case riakc_pb_socket:search(C#wm_context.riaksearch_pid, <<"metric_names_index">>,
-				SearchQuery, [ {fl, [<<"name_s">>, <<"type_s">>]}, {rows, ?MAX_RESULTS}, { start, 0}]) of
-	{ok, Results} ->
-	    NumFound = Results#search_results.num_found,
-	    error_logger:info_msg("~p: found ~p results ~n", [ ?MODULE, NumFound ]),
-	    Documents = Results#search_results.docs,
+                                SearchQuery, [ {fl, [<<"name_s">>, <<"type_s">>]}, {rows, ?MAX_RESULTS}, { start, 0}]) of
+        {ok, Results} ->
+            NumFound = Results#search_results.num_found,
+            error_logger:info_msg("~p: found ~p results ~n", [ ?MODULE, NumFound ]),
+            Documents = Results#search_results.docs,
 
-	    Matches = build_matches(Documents),
-	    Result = {[ {<<"name">>, list_to_binary(Query)},
-			{<<"matches">>, Matches} ]},
-	    Json = iolist_to_binary(mochijson2:encode(Result)),
+            Matches = build_matches(Documents),
+            Result = {[ {<<"name">>, list_to_binary(Query)},
+                        {<<"matches">>, Matches} ]},
+            Json = iolist_to_binary(mochijson2:encode(Result)),
 
-	    error_logger:info_msg("~p: JSON  ~p ~n", [ ?MODULE, Json ]),
-	    ReqData2 = wrq:set_resp_header("Content-Type", "application/json", ReqData),
-	    {Json, ReqData2};
-	{error, _} = Error ->
-	    {Error, ReqData}
+            error_logger:info_msg("~p: JSON  ~p ~n", [ ?MODULE, Json ]),
+            ReqData2 = wrq:set_resp_header("Content-Type", "application/json", ReqData),
+            {Json, ReqData2};
+        {error, _} = Error ->
+            {Error, ReqData}
     end.
 
 -spec service_available(#wm_reqdata{}, #wm_context{}) -> { boolean(), #wm_reqdata{}, #wm_context{} }.
@@ -210,9 +210,9 @@ build_matches([Document|Tail], Acc) ->
     { <<"metric_names_index">>, Value } = Document,
     Path = proplists:get_value(<<"name_s">>, Value),
     IsLeaf = case proplists:get_value(<<"type_s">>, Value) of
-		 <<"branch">> -> false;
-		 <<"leaf">> -> true
-	     end,
+                 <<"branch">> -> false;
+                 <<"leaf">> -> true
+             end,
     Element = {[ {path, Path}, {isLeaf, IsLeaf} ]},
     build_matches(Tail, [Element| Acc]).
 

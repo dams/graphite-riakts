@@ -32,7 +32,7 @@ init([]) ->
 
 handle_call({maybe_index}, _From, _State = { C }) ->
     Set = riakc_pb_socket:fetch_type(C#context.riaksearch_pid, {<<"sets">>,<<"graphite_riakts_sets">>},
-				     <<"new_metrics_keys">>),
+                                     <<"new_metrics_keys">>),
     SomethingWasIndexed = index_from_set(Set, C),
     SleepTime = case SomethingWasIndexed of
                     false -> 10000; % there were nothing to index, call us in 10 sec
@@ -55,7 +55,7 @@ wait_for_indexing(MetricName, GroupKey, C) -> wait_for_indexing(MetricName, Grou
 wait_for_indexing(undefined,  _GroupKey, _WaitTime, _C) -> ok;
 wait_for_indexing(MetricName, _GroupKey,  WaitTime,  C) when WaitTime > C#context.riaksearch_batch_indexing_timeout_ms ->
     error_logger:error_msg("~p: timeout error waiting for indexing of metric ~p (timeout is ~p) ~n",
-			   [ ?MODULE, MetricName, C#context.riaksearch_batch_indexing_timeout_ms ]),
+                           [ ?MODULE, MetricName, C#context.riaksearch_batch_indexing_timeout_ms ]),
     {error, timeout};
     % TODO: if wait failed, readd the metrics to be indexed in the set
 wait_for_indexing(MetricName,  GroupKey,  WaitTime,  C) ->
@@ -66,7 +66,7 @@ wait_for_indexing(MetricName,  GroupKey,  WaitTime,  C) ->
         0 -> T2 = get_timestamp_ms(),
              wait_for_indexing(MetricName, GroupKey, WaitTime + T2 - T1, C);
         Num -> error_logger:info_msg("~p: found ~p result for metric ~p ~n", [ ?MODULE, Num, MetricName ]),
-	       ok = riakc_pb_socket:delete(C#context.riaksearch_pid, <<"to_be_indexed">>, GroupKey),
+               ok = riakc_pb_socket:delete(C#context.riaksearch_pid, <<"to_be_indexed">>, GroupKey),
                ok
     end.
 
@@ -107,39 +107,39 @@ store_metric_names([MetricName|Tail], _LastMetricNameIndexed, C) ->
 store_nodes(MetricName, C) ->
     [FirstBranch|Nodes] = binary:split(MetricName, <<".">>, [global, trim]),
     case Nodes of
-	[] -> store_leaf(FirstBranch, 1,C);
-	NonEmptyNodes ->
-	    store_branch(FirstBranch, 1, C),
-	    store_nodes(FirstBranch, NonEmptyNodes, 2, C)
+        [] -> store_leaf(FirstBranch, 1,C);
+        NonEmptyNodes ->
+            store_branch(FirstBranch, 1, C),
+            store_nodes(FirstBranch, NonEmptyNodes, 2, C)
     end.
 
 store_nodes( Branch, [Node | Tail], Level, C) ->
     NewBranch = <<Branch/binary, ".", Node/binary>>,
     case Tail of 
-	[] ->
-	    store_leaf(NewBranch, Level, C);
-	_Otherwise ->
-	    store_branch(NewBranch, Level, C),
-	    store_nodes(NewBranch, Tail, Level + 1, C)
+        [] ->
+            store_leaf(NewBranch, Level, C);
+        _Otherwise ->
+            store_branch(NewBranch, Level, C),
+            store_nodes(NewBranch, Tail, Level + 1, C)
     end.
 
 store_branch(Name, Level, C) ->
     % we use only one memcache for both branches and leaves
     case cache:get(metric_names_cache, Name) of
-	undefined ->
-	    ok = cache:put(metric_names_cache, Name, <<"branch">>),
-	    case riakc_pb_socket:get(C#context.riaksearch_pid, C#context.bucket_name, Name) of
-		{ ok, _Obj } -> ok; % already stored in KV (was missing from the cache)
-		_Otherwise ->
-		    LevelBin = integer_to_binary(Level),
-		    % JSON crafted by hand, what could possibly go wrong ?
-		    Value = <<"{\"name_s\": \"", Name/binary, "\", \"level_i\": ",
-			      LevelBin/binary, ", \"type_s\": \"branch\"}">>,
-		    Obj = riakc_obj:new(list_to_binary(C#context.bucket_name), _Key = Name, Value ),
-		    Obj2 = riakc_obj:update_content_type(Obj, <<"application/json">>),
-		    ok = riakc_pb_socket:put(C#context.riaksearch_pid, Obj2, [ {w, 3}, {dw, 3}, {pw, 0} ])
-	    end;
-	_val -> ok % already in memory cache 
+        undefined ->
+            ok = cache:put(metric_names_cache, Name, <<"branch">>),
+            case riakc_pb_socket:get(C#context.riaksearch_pid, C#context.bucket_name, Name) of
+                { ok, _Obj } -> ok; % already stored in KV (was missing from the cache)
+                _Otherwise ->
+                    LevelBin = integer_to_binary(Level),
+                    % JSON crafted by hand, what could possibly go wrong ?
+                    Value = <<"{\"name_s\": \"", Name/binary, "\", \"level_i\": ",
+                              LevelBin/binary, ", \"type_s\": \"branch\"}">>,
+                    Obj = riakc_obj:new(list_to_binary(C#context.bucket_name), _Key = Name, Value ),
+                    Obj2 = riakc_obj:update_content_type(Obj, <<"application/json">>),
+                    ok = riakc_pb_socket:put(C#context.riaksearch_pid, Obj2, [ {w, 3}, {dw, 3}, {pw, 0} ])
+            end;
+        _val -> ok % already in memory cache 
     end.
 
 % store_leaf doesn't check the memory cache because graphite_riakts_protocol
@@ -147,15 +147,15 @@ store_branch(Name, Level, C) ->
 store_leaf(Name, Level, C) ->
     % we use only one memcache for both branches and leaves
     case riakc_pb_socket:get(C#context.riaksearch_pid, C#context.bucket_name, Name) of
-	{ ok, _Obj } -> ok; % already stored in KV (was missing from the cache)
-	_Otherwise ->
-	    LevelBin = integer_to_binary(Level),
-	    % JSON crafted by hand, what could possibly go wrong ?
-	    Value = <<"{\"name_s\": \"", Name/binary, "\", \"level_i\": ",
-		      LevelBin/binary, ", \"type_s\": \"leaf\"}">>,
-	    Obj = riakc_obj:new(list_to_binary(C#context.bucket_name), _Key = Name, Value ),
-	    Obj2 = riakc_obj:update_content_type(Obj, <<"application/json">>),
-	    ok = riakc_pb_socket:put(C#context.riaksearch_pid, Obj2, [ {w, 3}, {dw, 3}, {pw, 0} ])
+        { ok, _Obj } -> ok; % already stored in KV (was missing from the cache)
+        _Otherwise ->
+            LevelBin = integer_to_binary(Level),
+            % JSON crafted by hand, what could possibly go wrong ?
+            Value = <<"{\"name_s\": \"", Name/binary, "\", \"level_i\": ",
+                      LevelBin/binary, ", \"type_s\": \"leaf\"}">>,
+            Obj = riakc_obj:new(list_to_binary(C#context.bucket_name), _Key = Name, Value ),
+            Obj2 = riakc_obj:update_content_type(Obj, <<"application/json">>),
+            ok = riakc_pb_socket:put(C#context.riaksearch_pid, Obj2, [ {w, 3}, {dw, 3}, {pw, 0} ])
     end.
 
 get_timestamp_ms() ->
