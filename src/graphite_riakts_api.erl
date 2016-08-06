@@ -11,6 +11,8 @@
 init() ->
     [webmachine_router:add_route(R) 
      || R <- [ {["metrics", "find"],
-                graphite_riakts_api_find, []}
+                graphite_riakts_api_find, []},
+               {["render"],
+                graphite_riakts_api_render, []}
              ]],
     ok.

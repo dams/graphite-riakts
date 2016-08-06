@@ -15,7 +15,8 @@
 -record(wm_context, {
           format = "json" :: string(),
           query           :: string(),
-          riaksearch_pid  :: pid()
+          riaksearch_pid  :: pid(),
+          bucket_name     :: string()
          }).
 
 -type search_doc() :: {bitstring(), [proplists:property()] }.
@@ -39,8 +40,9 @@ malformed_request(ReqData, C) ->
     InitC = graphite_riakts_config:init_context(),
     { ok, RiakSearchPid } = riakc_pb_socket:start_link(InitC#context.riaksearch_ip, InitC#context.riaksearch_port),
     NewC = #wm_context{
-              query = case wrq:get_qs_value("query", ReqData) of undefined -> C#wm_context.query; V -> V end,
-              riaksearch_pid = RiakSearchPid
+              query = wrq:get_qs_value("query", ReqData),
+              riaksearch_pid = RiakSearchPid,
+              bucket_name = InitC#context.bucket_name
              },
     case NewC of
         #wm_context{ query = undefined } -> {true, ReqData, C};
@@ -99,16 +101,52 @@ looks_like_regex(Query, Offset) ->
     end.
 
 
-  %% % if simple metric eq
-  %%   % remove potential trailing dot
-  %%   {ok, Regex} = re:compile("\\.$"),
-  %%   MetricName = re:replace(Query, Regex, ""),
-  %%   case cache:get(metric_names_cache, Query) of
+
+-define(MAX_RESULTS, 1000).
 
 -spec perform_search( {tree_walking, string()} | regex | simple_match,
                       #wm_reqdata{}, #wm_context{}) -> { iodata(), #wm_reqdata{} }.
 
--define(MAX_RESULTS, 1000).
+perform_search(simple_match, ReqData, C) ->
+    % query is not a regex, not a ".*" ending string. We just simple-match it
+    % against metrics. First we remove trailing dots.
+    Query = C#wm_context.query,
+    {ok, RegexDotEnd} = re:compile("\\.$"),
+    Query2 = re:replace(Query, RegexDotEnd, ""),
+    QueryBin = list_to_binary(Query2),
+    Result = case cache:get(metric_names_cache, QueryBin) of
+        undefined ->
+            % try exact query from Riak KV
+            case riakc_pb_socket:get(C#wm_context.riaksearch_pid, C#wm_context.bucket_name, QueryBin) of
+                { ok, Obj } ->
+                    Value = riakc_obj:get_value(Obj),
+                    error_logger:info_msg("~p: exact query in Riak KV: ~p ~n", [ ?MODULE, Value ]),
+                    {ok, RegexIsBranch} = re:compile("\"type_s\": \"branch\""),
+                    % matching JSON by hand, what could possibly go wrong ?                    
+                    IsLeaf = case re:run(Value, RegexIsBranch) of {match,_} -> true; _ -> false end,
+                    {[ {<<"name">>, list_to_binary(Query)},
+                       {<<"matches">>, [  {[ {path, QueryBin}, {isLeaf, IsLeaf} ]} ] }
+                     ]};
+                _Otherwise -> 
+                    error_logger:info_msg("~p: didn't find exact query ~p in Riak KV: ~n", [ ?MODULE, QueryBin ]),
+                    {[ {<<"name">>, list_to_binary(Query)} ]}
+            end;
+        <<"">> ->
+            error_logger:info_msg("~p: exact match metric in memory cache ~n", [ ?MODULE ]),
+            {[ {<<"name">>, list_to_binary(Query)},
+               {<<"matches">>, [  {[ {path, QueryBin}, {isLeaf, true} ]} ] }
+            ]};
+        <<"branch">> ->
+           error_logger:info_msg("~p: exact match node in memory cache ~n", [ ?MODULE ]),
+           {[ {<<"name">>, list_to_binary(Query)},
+              {<<"matches">>, [  {[ {path, QueryBin}, {isLeaf, false} ]} ] }
+           ]}
+    end,
+    Json = iolist_to_binary(mochijson2:encode(Result)),
+    error_logger:info_msg("~p: JSON  ~p ~n", [ ?MODULE, Json ]),
+    ReqData2 = wrq:set_resp_header("Content-Type", "application/json", ReqData),
+    {Json, ReqData2};
+
 perform_search({tree_walking, _ParentMetricName}, ReqData, C) ->
     error_logger:info_msg("~p: query looks like a simple tree walking ~n", [ ?MODULE ]),
 
